@@ -1,0 +1,39 @@
+# Environment
+.env
+.env.local
+
+# Rust
+rust-engine/target/
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+
+# Node
+nextjs-frontend/node_modules/
+nextjs-frontend/.next/
+nextjs-frontend/out/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Docker volumes
+questdb-data/
+backups/
+
+# OS
+.DS_Store
+Thumbs.db
+nul
+
+# Claude Code internals
+.claude/worktrees/

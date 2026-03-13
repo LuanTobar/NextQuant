@@ -1,0 +1,30 @@
+# ── Virtual environments & package managers ─────────────────
+.venv/
+node_modules/
+__pycache__/
+
+# ── Rust build artifacts ─────────────────────────────────────
+target/
+
+# ── Build outputs ────────────────────────────────────────────
+.next/
+dist/
+*.egg-info/
+
+# ── Logs & test caches ────────────────────────────────────────
+*.log
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ── Local database data (Docker-managed volumes; included here
+#    in case of bind-mount changes) ──────────────────────────
+backups/
+questdb/data/
+postgres/data/
+redis/data/
+nats/data/
+
+# ── OS & IDE artifacts ────────────────────────────────────────
+nul
+.DS_Store

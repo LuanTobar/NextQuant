@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:crates.io)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:lib.rs)",
+      "WebFetch(domain:docs.alpaca.markets)",
+      "WebFetch(domain:finnhub.io)",
+      "WebFetch(domain:artificialanalysis.ai)"
+    ]
+  }
+}

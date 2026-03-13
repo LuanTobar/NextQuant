@@ -1,0 +1,239 @@
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "linux-musl-arm64-openssl-3.0.x", "linux-musl-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Plan {
+  FREE
+  PRO
+}
+
+enum BrokerType {
+  ALPACA
+  BITGET
+}
+
+enum OrderStatus {
+  PENDING
+  FILLED
+  PARTIALLY_FILLED
+  CANCELLED
+  REJECTED
+}
+
+enum OrderSide {
+  BUY
+  SELL
+}
+
+model User {
+  id             String   @id @default(cuid())
+  email          String   @unique
+  name           String?
+  hashedPassword String?
+  image          String?
+  plan           Plan     @default(FREE)
+  chatUsageToday Int      @default(0)
+  chatResetDate  DateTime @default(now())
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  // Email verification (Sprint 1)
+  emailVerified      Boolean   @default(false)
+  verificationToken  String?
+  verificationExpiry DateTime?
+
+  // Password reset (Sprint 1)
+  resetToken  String?
+  resetExpiry DateTime?
+
+  // Onboarding (Sprint 2)
+  onboardingCompleted Boolean @default(false)
+
+  // Stripe billing (Sprint 3)
+  stripeCustomerId   String?   @unique
+  subscriptionId     String?
+  subscriptionStatus String?
+  gracePeriodEnd     DateTime?
+
+  accounts        Account[]
+  brokerKeys      BrokerConnection[]
+  orders          Order[]
+  positionRisks   PositionRisk[]
+  agentConfig     AgentConfig?
+  riskProfile     RiskProfile?
+  claudeDecisions ClaudeDecision[]
+  auditLogs       AuditLog[]
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String?
+  access_token      String?
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String?
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model BrokerConnection {
+  id              String     @id @default(cuid())
+  userId          String
+  broker          BrokerType
+  label           String?
+  encryptedKey    String
+  encryptedSecret String
+  encryptedExtra  String?
+  isActive        Boolean    @default(true)
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+
+  user   User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  orders Order[]
+
+  @@unique([userId, broker])
+}
+
+model Order {
+  id                 String      @id @default(cuid())
+  userId             String
+  brokerConnectionId String
+  symbol             String
+  side               OrderSide
+  quantity           Float
+  orderType          String      @default("market")
+  limitPrice         Float?
+  status             OrderStatus @default(PENDING)
+  brokerOrderId      String?
+  filledPrice        Float?
+  filledQuantity     Float?
+  brokerResponse     Json?
+  createdAt          DateTime    @default(now())
+  updatedAt          DateTime    @updatedAt
+
+  user             User             @relation(fields: [userId], references: [id])
+  brokerConnection BrokerConnection @relation(fields: [brokerConnectionId], references: [id])
+
+  @@index([userId, createdAt])
+  @@index([userId, status])
+}
+
+model PositionRisk {
+  id              String     @id @default(cuid())
+  userId          String
+  broker          BrokerType
+  symbol          String
+  stopLossPrice   Float?
+  takeProfitPrice Float?
+  isActive        Boolean    @default(true)
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, broker, symbol])
+}
+
+model AgentConfig {
+  id                     String     @id @default(cuid())
+  userId                 String     @unique
+  enabled                Boolean    @default(false)
+  broker                 BrokerType @default(BITGET)
+  maxPositionSizeUsd     Float      @default(100)
+  maxConcurrentPositions Int        @default(3)
+  dailyLossLimitUsd      Float      @default(500)
+  maxDrawdownPct         Float      @default(10)
+  aggressiveness         Float      @default(0.5)
+  allowedSymbols         String[]   @default([])
+  createdAt              DateTime   @default(now())
+  updatedAt              DateTime   @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+// ── Sprint 1.5: Risk Profiling ─────────────────────────────────────────────────
+model RiskProfile {
+  id     String @id @default(cuid())
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // Questionnaire answers
+  investmentHorizon String  // SHORT | MEDIUM | LONG
+  riskTolerance     String  // CONSERVATIVE | MODERATE | AGGRESSIVE
+  experienceLevel   String  // BEGINNER | INTERMEDIATE | EXPERT
+  incomeStability   String  // UNSTABLE | VARIABLE | STABLE
+  lossCapacity      String  // LOW | MEDIUM | HIGH
+  primaryGoal       String  // CAPITAL_PRESERVATION | INCOME | GROWTH | SPECULATION
+
+  // Derived score & category (computed server-side)
+  riskScore    Float  @default(0.5)
+  riskCategory String @default("MODERATE")
+
+  // Derived AgentConfig overrides (synced to AgentConfig on save)
+  maxPositionSizeUsd    Float @default(150)
+  maxConcurrentPositions Int  @default(3)
+  dailyLossLimitUsd     Float @default(400)
+  maxDrawdownPct        Float @default(12)
+  aggressiveness        Float @default(0.45)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model ClaudeDecision {
+  id              String    @id @default(cuid())
+  userId          String
+  symbol          String
+  action          String    // OPEN_LONG, CLOSE, HOLD, SKIP
+  mlSignal        Json      // Full ML signal that triggered evaluation
+  claudeAnalysis  Json      // Full Claude response
+  recommendation  String    // APPROVE, REJECT, REDUCE
+  confidence      Float
+  expectedReturn  Float
+  expectedPnl     Float
+  riskRewardRatio Float
+  adjustedSize    Float?
+  entryPrice      Float?
+  exitPrice       Float?
+  actualPnl       Float?
+  outcome         String?   // WIN, LOSS, null (pending)
+  executionStatus String    // EXECUTED, SKIPPED, FAILED, TIMEOUT
+  latencyMs       Int       // Claude API response time
+  createdAt       DateTime  @default(now())
+  closedAt        DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([userId, symbol])
+  @@index([symbol, outcome])
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  userId    String
+  action    String   // LOGIN, BROKER_CONNECT, BROKER_DISCONNECT, ORDER_PLACE, ORDER_CANCEL, AGENT_CONFIG, PASSWORD_CHANGE, PROFILE_UPDATE
+  resource  String?  // e.g., "ALPACA", "AAPL", order ID
+  details   Json?    // additional context
+  ipAddress String?
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([action])
+}

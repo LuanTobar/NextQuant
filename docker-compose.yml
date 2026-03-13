@@ -1,0 +1,226 @@
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6381:6379"
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+    networks:
+      - nexquant-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  nats:
+    image: nats:2.10-alpine
+    ports:
+      - "4222:4222"
+      - "8223:8222"
+      - "6222:6222"
+    volumes:
+      - ./infrastructure/nats/nats.conf:/etc/nats/nats.conf
+    command: ["-c", "/etc/nats/nats.conf"]
+    networks:
+      - nexquant-net
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8245/healthz || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
+  questdb:
+    image: questdb/questdb:7.3.10
+    ports:
+      - "9010:9000"
+      - "9019:9009"
+      - "8813:8812"
+    environment:
+      - QDB_CAIRO_COMMIT_LAG=1000
+      - QDB_PG_ENABLED=true
+    volumes:
+      - questdb-data:/var/lib/questdb
+    networks:
+      - nexquant-net
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/localhost/9000' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  rust-engine:
+    build:
+      context: ./rust-engine
+      dockerfile: Dockerfile
+    env_file:
+      - .env
+    environment:
+      - RUST_LOG=info
+      - NATS_URL=nats://nats:4222
+      - QUESTDB_URL=http://questdb:9000
+      - TICK_INTERVAL_MS=1000
+      - SNAPSHOT_INTERVAL_MS=5000
+      - BATCH_SIZE=10
+    ports:
+      - "8085:8080"
+    depends_on:
+      nats:
+        condition: service_healthy
+      questdb:
+        condition: service_healthy
+    networks:
+      - nexquant-net
+    restart: unless-stopped
+
+  python-ml:
+    build:
+      context: ./python-ml
+      dockerfile: Dockerfile
+    environment:
+      - NATS_URL=nats://nats:4222
+      - QUESTDB_URL=http://questdb:9000
+      - LOG_LEVEL=INFO
+      - MODEL_RETRAIN_INTERVAL=100
+      - CAUSAL_LOOKBACK=20
+      - HEALTH_PORT=8086
+      - MODEL_SAVE_PATH=/app/models
+    ports:
+      - "8086:8086"
+    volumes:
+      - ml-models:/app/models
+    depends_on:
+      nats:
+        condition: service_healthy
+      rust-engine:
+        condition: service_started
+    networks:
+      - nexquant-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8086/health', timeout=4)\" 2>/dev/null || exit 1"]
+      interval: 15s
+      timeout: 6s
+      retries: 5
+      start_period: 45s
+
+  postgres:
+    image: postgres:16-alpine
+    ports:
+      - "5433:5432"
+    environment:
+      POSTGRES_DB: nexquant
+      POSTGRES_USER: nexquant
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-nexquant_dev}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - nexquant-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nexquant"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  trading-agent:
+    build:
+      context: ./trading-agent
+      dockerfile: Dockerfile
+    env_file:
+      - .env
+    environment:
+      - NATS_URL=nats://nats:4222
+      - DATABASE_URL=postgresql://nexquant:${POSTGRES_PASSWORD:-nexquant_dev}@postgres:5432/nexquant
+      - QUESTDB_URL=http://questdb:9000
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY}
+      - LOG_LEVEL=INFO
+      - CONFIG_RELOAD_INTERVAL_S=60
+      - POSITION_SYNC_INTERVAL_S=30
+      - HEALTH_PORT=8090
+      # Claude Decision Layer (ANTHROPIC_API_KEY loaded from .env via env_file)
+      - CLAUDE_ENABLED=${CLAUDE_ENABLED:-true}
+      - CLAUDE_MODEL=${CLAUDE_MODEL:-claude-sonnet-4-20250514}
+      - CLAUDE_CONFIDENCE_THRESHOLD=${CLAUDE_CONFIDENCE_THRESHOLD:-0.65}
+      - CLAUDE_MIN_EXPECTED_RETURN=${CLAUDE_MIN_EXPECTED_RETURN:-0.0025}
+      - ALERT_WEBHOOK_URL=${ALERT_WEBHOOK_URL:-}
+    ports:
+      - "8090:8090"
+    depends_on:
+      nats:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      python-ml:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - nexquant-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; r=urllib.request.urlopen('http://localhost:8090/health', timeout=4); import json; d=json.load(r); exit(0 if d.get('status')=='ok' else 1)\" 2>/dev/null || exit 1"]
+      interval: 10s
+      timeout: 6s
+      retries: 5
+      start_period: 20s
+
+  nextjs-frontend:
+    build:
+      context: ./nextjs-frontend
+      dockerfile: Dockerfile
+    ports:
+      - "3005:3000"
+    env_file:
+      - .env
+    environment:
+      - NATS_URL=nats://nats:4222
+      - NEXT_PUBLIC_NATS_WS_URL=ws://localhost:8223
+      - NEXT_PUBLIC_QUESTDB_URL=http://localhost:9010
+      - QUESTDB_URL=http://questdb:9000
+      - DATABASE_URL=postgresql://nexquant:${POSTGRES_PASSWORD:-nexquant_dev}@postgres:5432/nexquant
+      - NEXTAUTH_URL=http://localhost:3005
+      - NEXTAUTH_SECRET=${NEXTAUTH_SECRET:-nexquant-dev-secret-change-in-production}
+      - REDIS_URL=redis://redis:6379
+    depends_on:
+      nats:
+        condition: service_healthy
+      questdb:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - nexquant-net
+    restart: unless-stopped
+
+  pg_backup:
+    image: postgres:16-alpine
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD:-nexquant_dev}
+    volumes:
+      - ./backups:/backups
+    entrypoint: >
+      sh -c "while true; do
+        TIMESTAMP=$$(date +%Y%m%d_%H%M%S) &&
+        pg_dump -h postgres -U nexquant nexquant | gzip > /backups/nexquant_$$TIMESTAMP.sql.gz &&
+        find /backups -name '*.sql.gz' -mtime +7 -delete &&
+        echo \"Backup OK: nexquant_$$TIMESTAMP.sql.gz\" &&
+        sleep 86400;
+      done"
+    networks:
+      - nexquant-net
+    restart: unless-stopped
+
+networks:
+  nexquant-net:
+    driver: bridge
+
+volumes:
+  questdb-data:
+  postgres-data:
+  ml-models:

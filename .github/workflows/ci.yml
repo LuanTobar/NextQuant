@@ -1,0 +1,126 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  # ── Python ML Tests ──────────────────────────────────────────
+  python-ml-tests:
+    name: "python-ml (150 tests)"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: python-ml/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r python-ml/requirements.txt
+          pip install pytest pytest-asyncio
+
+      - name: Run tests
+        run: |
+          python -m pytest python-ml/tests/ -v --tb=short
+        env:
+          PYTHONPATH: python-ml/src
+
+  # ── Trading Agent Tests ──────────────────────────────────────
+  trading-agent-tests:
+    name: "trading-agent (97 tests)"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: trading-agent/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r trading-agent/requirements.txt
+          pip install -r python-ml/requirements.txt
+          pip install pytest pytest-asyncio
+
+      - name: Run tests
+        run: |
+          python -m pytest trading-agent/tests/ -v --tb=short
+        env:
+          # sys.path clash: both services define src/ — expose python-ml/src directly
+          PYTHONPATH: python-ml/src:trading-agent/src
+
+  # ── Rust Build & Test ────────────────────────────────────────
+  rust-build:
+    name: "rust-engine (build + test)"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust 1.85
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.85.0"
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust-engine/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('rust-engine/Cargo.lock') }}
+
+      - name: Pin time crate to 0.3.36
+        working-directory: rust-engine
+        run: cargo update time --precise 0.3.36 || true
+
+      - name: Build
+        working-directory: rust-engine
+        run: cargo build --release
+
+      - name: Test
+        working-directory: rust-engine
+        run: cargo test --release
+
+  # ── Next.js Build ────────────────────────────────────────────
+  nextjs-build:
+    name: "nextjs-frontend (build)"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: nextjs-frontend/package-lock.json
+
+      - name: Install dependencies
+        working-directory: nextjs-frontend
+        run: npm ci
+
+      - name: Generate Prisma client
+        working-directory: nextjs-frontend
+        run: npx prisma generate
+
+      - name: Build
+        working-directory: nextjs-frontend
+        run: npm run build
+        env:
+          # Placeholder values for build-time env validation (no DB connection at build time)
+          NEXTAUTH_SECRET: "ci-placeholder-secret-minimum-32-characters-long"
+          NEXTAUTH_URL: "http://localhost:3005"
+          DATABASE_URL: "postgresql://ci:ci@localhost:5432/ci"
+          ENCRYPTION_KEY: "0000000000000000000000000000000000000000000000000000000000000000"
+          STRIPE_SECRET_KEY: "sk_test_placeholder"
+          STRIPE_WEBHOOK_SECRET: "whsec_placeholder"
