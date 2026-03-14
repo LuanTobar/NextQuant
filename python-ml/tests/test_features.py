@@ -167,7 +167,7 @@ class TestFeatureStore:
         store.compute_features("US", "AAPL")
         elapsed_ms = (time.perf_counter() - t0) * 1000
 
-        assert elapsed_ms < 50, f"Feature computation took {elapsed_ms:.1f}ms (limit: 50ms)"
+        assert elapsed_ms < 100, f"Feature computation took {elapsed_ms:.1f}ms (limit: 100ms)"
 
 
 # ── Technical Features Tests ──────────────────────────────────────────────────

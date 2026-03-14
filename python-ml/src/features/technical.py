@@ -26,7 +26,10 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
-import pandas_ta as ta
+import ta.momentum as tam
+import ta.trend as tat
+import ta.volatility as tav
+import ta.volume as tavol
 
 warnings.filterwarnings("ignore", category=RuntimeWarning)
 
@@ -59,129 +62,196 @@ def _compute_indicators(df: pd.DataFrame, prefix: str) -> dict[str, float]:
 
     # ── RSI ──────────────────────────────────────────────────────────────────
     for period in (14, 28):
-        v = _safe_last(ta.rsi(close, length=period))
-        if v is not None:
-            feat[f"{prefix}_rsi_{period}"] = v
+        try:
+            v = _safe_last(tam.RSIIndicator(close, window=period, fillna=False).rsi())
+            if v is not None:
+                feat[f"{prefix}_rsi_{period}"] = v
+        except Exception:
+            pass
 
     # ── MACD ─────────────────────────────────────────────────────────────────
-    macd_df = ta.macd(close, fast=12, slow=26, signal=9)
-    if macd_df is not None and len(macd_df):
-        for col, key in zip(macd_df.columns[:3], ("macd", "macd_hist", "macd_signal")):
-            v = _safe_last(macd_df[col])
+    try:
+        macd_ind = tat.MACD(close, window_slow=26, window_fast=12, window_sign=9, fillna=False)
+        for series, key in (
+            (macd_ind.macd(), "macd"),
+            (macd_ind.macd_diff(), "macd_hist"),
+            (macd_ind.macd_signal(), "macd_signal"),
+        ):
+            v = _safe_last(series)
             if v is not None:
                 feat[f"{prefix}_{key}"] = v
+    except Exception:
+        pass
 
     # ── Bollinger Bands ───────────────────────────────────────────────────────
-    bb_df = ta.bbands(close, length=20, std=2)
-    if bb_df is not None and len(bb_df):
-        cols = bb_df.columns.tolist()
-        keys = ("bb_lower", "bb_mid", "bb_upper", "bb_bandwidth", "bb_pct_b")
-        for col, key in zip(cols[:5], keys):
-            v = _safe_last(bb_df[col])
+    try:
+        bb = tav.BollingerBands(close, window=20, window_dev=2, fillna=False)
+        bb_lower = bb.bollinger_lband()
+        bb_mid   = bb.bollinger_mavg()
+        bb_upper = bb.bollinger_hband()
+        bb_wband = bb.bollinger_wband()
+        bb_pband = bb.bollinger_pband()
+        for series, key in (
+            (bb_lower, "bb_lower"), (bb_mid, "bb_mid"), (bb_upper, "bb_upper"),
+            (bb_wband, "bb_bandwidth"), (bb_pband, "bb_pct_b"),
+        ):
+            v = _safe_last(series)
             if v is not None:
                 feat[f"{prefix}_{key}"] = v
+    except Exception:
+        pass
 
     # ── ATR ───────────────────────────────────────────────────────────────────
-    v = _safe_last(ta.atr(high, low, close, length=14))
-    if v is not None:
-        feat[f"{prefix}_atr_14"] = v
+    for period in (14, 7):
+        try:
+            key = f"{prefix}_atr_{period}"
+            v = _safe_last(tav.AverageTrueRange(high, low, close, window=period, fillna=False).average_true_range())
+            if v is not None:
+                feat[key] = v
+        except Exception:
+            pass
 
     # ── OBV + momentum ───────────────────────────────────────────────────────
-    obv = ta.obv(close, volume)
-    if obv is not None and len(obv) >= 5:
-        v = _safe_last(obv)
-        if v is not None:
-            feat[f"{prefix}_obv"] = v
-        obv_clean = obv.dropna()
-        if len(obv_clean) >= 5:
-            feat[f"{prefix}_obv_momentum_5"] = float(obv_clean.iloc[-1] - obv_clean.iloc[-5])
+    try:
+        obv = tavol.OnBalanceVolumeIndicator(close, volume, fillna=False).on_balance_volume()
+        if obv is not None and len(obv) >= 5:
+            v = _safe_last(obv)
+            if v is not None:
+                feat[f"{prefix}_obv"] = v
+            obv_clean = obv.dropna()
+            if len(obv_clean) >= 5:
+                feat[f"{prefix}_obv_momentum_5"] = float(obv_clean.iloc[-1] - obv_clean.iloc[-5])
+    except Exception:
+        pass
 
     # ── ADX ───────────────────────────────────────────────────────────────────
-    adx_df = ta.adx(high, low, close, length=14)
-    if adx_df is not None and len(adx_df):
-        for col, key in zip(adx_df.columns[:3], ("adx", "adx_di_plus", "adx_di_minus")):
-            v = _safe_last(adx_df[col])
+    try:
+        adx_ind = tat.ADXIndicator(high, low, close, window=14, fillna=False)
+        for series, key in (
+            (adx_ind.adx(), "adx"),
+            (adx_ind.adx_pos(), "adx_di_plus"),
+            (adx_ind.adx_neg(), "adx_di_minus"),
+        ):
+            v = _safe_last(series)
             if v is not None:
                 feat[f"{prefix}_{key}"] = v
+    except Exception:
+        pass
 
     # ── Stochastic ────────────────────────────────────────────────────────────
-    stoch_df = ta.stoch(high, low, close)
-    if stoch_df is not None and len(stoch_df):
-        for col, key in zip(stoch_df.columns[:2], ("stoch_k", "stoch_d")):
-            v = _safe_last(stoch_df[col])
+    try:
+        stoch = tam.StochasticOscillator(high, low, close, window=14, smooth_window=3, fillna=False)
+        for series, key in (
+            (stoch.stoch(), "stoch_k"),
+            (stoch.stoch_signal(), "stoch_d"),
+        ):
+            v = _safe_last(series)
             if v is not None:
                 feat[f"{prefix}_{key}"] = v
+    except Exception:
+        pass
 
     # ── Williams %R ───────────────────────────────────────────────────────────
-    v = _safe_last(ta.willr(high, low, close, length=14))
-    if v is not None:
-        feat[f"{prefix}_williams_r"] = v
+    try:
+        v = _safe_last(tam.WilliamsRIndicator(high, low, close, lbp=14, fillna=False).williams_r())
+        if v is not None:
+            feat[f"{prefix}_williams_r"] = v
+    except Exception:
+        pass
 
     # ── CCI ───────────────────────────────────────────────────────────────────
-    v = _safe_last(ta.cci(high, low, close, length=20))
-    if v is not None:
-        feat[f"{prefix}_cci"] = v
+    try:
+        v = _safe_last(tat.CCIIndicator(high, low, close, window=20, fillna=False).cci())
+        if v is not None:
+            feat[f"{prefix}_cci"] = v
+    except Exception:
+        pass
 
     # ── MFI ───────────────────────────────────────────────────────────────────
-    v = _safe_last(ta.mfi(high, low, close, volume, length=14))
-    if v is not None:
-        feat[f"{prefix}_mfi"] = v
+    try:
+        v = _safe_last(tavol.MFIIndicator(high, low, close, volume, window=14, fillna=False).money_flow_index())
+        if v is not None:
+            feat[f"{prefix}_mfi"] = v
+    except Exception:
+        pass
 
     # ── RSI extra period ─────────────────────────────────────────────────────
-    v = _safe_last(ta.rsi(close, length=7))
-    if v is not None:
-        feat[f"{prefix}_rsi_7"] = v
-
-    # ── ATR extra period ──────────────────────────────────────────────────────
-    v = _safe_last(ta.atr(high, low, close, length=7))
-    if v is not None:
-        feat[f"{prefix}_atr_7"] = v
+    try:
+        v = _safe_last(tam.RSIIndicator(close, window=7, fillna=False).rsi())
+        if v is not None:
+            feat[f"{prefix}_rsi_7"] = v
+    except Exception:
+        pass
 
     # ── EMAs + distance-to-EMA ───────────────────────────────────────────────
     current = float(close.iloc[-1])
     for period in (5, 10, 20, 50):
-        ema = ta.ema(close, length=period)
-        v = _safe_last(ema)
-        if v is not None and v > 0:
-            feat[f"{prefix}_ema_{period}"] = v
-            feat[f"{prefix}_ema_{period}_dist_pct"] = round((current - v) / v, 6)
+        try:
+            v = _safe_last(tat.EMAIndicator(close, window=period, fillna=False).ema_indicator())
+            if v is not None and v > 0:
+                feat[f"{prefix}_ema_{period}"] = v
+                feat[f"{prefix}_ema_{period}_dist_pct"] = round((current - v) / v, 6)
+        except Exception:
+            pass
 
     # ── SMAs + distance-to-SMA ───────────────────────────────────────────────
     for period in (10, 20, 50):
-        sma = ta.sma(close, length=period)
-        v = _safe_last(sma)
-        if v is not None and v > 0:
-            feat[f"{prefix}_sma_{period}"] = v
-            feat[f"{prefix}_sma_{period}_dist_pct"] = round((current - v) / v, 6)
+        try:
+            v = _safe_last(tat.SMAIndicator(close, window=period, fillna=False).sma_indicator())
+            if v is not None and v > 0:
+                feat[f"{prefix}_sma_{period}"] = v
+                feat[f"{prefix}_sma_{period}_dist_pct"] = round((current - v) / v, 6)
+        except Exception:
+            pass
 
     # ── Chaikin Money Flow (CMF) ──────────────────────────────────────────────
-    v = _safe_last(ta.cmf(high, low, close, volume, length=20))
-    if v is not None:
-        feat[f"{prefix}_cmf"] = v
+    try:
+        v = _safe_last(tavol.ChaikinMoneyFlowIndicator(high, low, close, volume, window=20, fillna=False).chaikin_money_flow())
+        if v is not None:
+            feat[f"{prefix}_cmf"] = v
+    except Exception:
+        pass
 
     # ── Keltner Channel ───────────────────────────────────────────────────────
-    kc_df = ta.kc(high, low, close, length=20)
-    if kc_df is not None and len(kc_df):
-        for col, key in zip(kc_df.columns[:3], ("kc_lower", "kc_mid", "kc_upper")):
-            v = _safe_last(kc_df[col])
+    try:
+        kc = tav.KeltnerChannel(high, low, close, window=20, fillna=False)
+        for series, key in (
+            (kc.keltner_channel_lband(), "kc_lower"),
+            (kc.keltner_channel_mband(), "kc_mid"),
+            (kc.keltner_channel_hband(), "kc_upper"),
+        ):
+            v = _safe_last(series)
             if v is not None:
                 feat[f"{prefix}_{key}"] = v
+    except Exception:
+        pass
 
     # ── Donchian Channel ──────────────────────────────────────────────────────
-    dc_df = ta.donchian(high, low, length=20)
-    if dc_df is not None and len(dc_df):
-        for col, key in zip(dc_df.columns[:3], ("dc_lower", "dc_mid", "dc_upper")):
-            v = _safe_last(dc_df[col])
+    try:
+        dc = tav.DonchianChannel(high, low, close, window=20, fillna=False)
+        for series, key in (
+            (dc.donchian_channel_lband(), "dc_lower"),
+            (dc.donchian_channel_mband(), "dc_mid"),
+            (dc.donchian_channel_hband(), "dc_upper"),
+        ):
+            v = _safe_last(series)
             if v is not None:
                 feat[f"{prefix}_{key}"] = v
+    except Exception:
+        pass
 
     # ── Aroon ─────────────────────────────────────────────────────────────────
-    aroon_df = ta.aroon(high, low, length=14)
-    if aroon_df is not None and len(aroon_df):
-        for col, key in zip(aroon_df.columns[:2], ("aroon_down", "aroon_up")):
-            v = _safe_last(aroon_df[col])
+    try:
+        aroon = tat.AroonIndicator(high, low, window=14, fillna=False)
+        for series, key in (
+            (aroon.aroon_down(), "aroon_down"),
+            (aroon.aroon_up(), "aroon_up"),
+        ):
+            v = _safe_last(series)
             if v is not None:
                 feat[f"{prefix}_{key}"] = v
+    except Exception:
+        pass
 
     return {k: round(v, 6) for k, v in feat.items()}
 

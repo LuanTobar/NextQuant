@@ -16,4 +16,4 @@ pydantic-settings>=2.1.0
 python-dotenv>=1.0.0
 httpx>=0.26.0
 structlog>=24.1.0
-pandas-ta==0.3.14b0
+ta>=0.10.2
