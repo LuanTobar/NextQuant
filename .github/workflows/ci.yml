@@ -27,7 +27,7 @@ jobs:
           pip install pytest pytest-asyncio
 
       - name: Run tests
-        working-directory: /python-ml
+        working-directory: ./python-ml 
         run: |
           python -m pytest tests/ -v --tb=short
         env:

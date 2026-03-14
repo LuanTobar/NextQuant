@@ -57,7 +57,7 @@ jobs:
       - name: Generar notas con Claude y actualizar GitHub
         env:
           # Usamos la llave que configuraste en pasos anteriores
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           # 1. Empaquetamos la petición de forma segura
