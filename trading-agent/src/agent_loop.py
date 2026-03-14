@@ -67,6 +67,7 @@ class AgentLoop:
         self._clients: dict[str, BrokerClient] = {}      # user_id -> broker client
         self._conn_ids: dict[str, str] = {}               # user_id -> broker connection ID
         self._risk_profiles: dict[str, dict] = {}         # user_id -> {risk_score, risk_category}
+        self._signal_locks: dict[str, asyncio.Lock] = {}  # "{user_id}:{symbol}" -> Lock
         self._bg_tasks: list[asyncio.Task] = []
         self._running = True
         self._start_time = time.time()
@@ -169,8 +170,14 @@ class AgentLoop:
         logger.debug("Signal received", symbol=symbol, signal=sig)
 
         for user_id, config in self._configs.items():
+            lock_key = f"{user_id}:{symbol}"
+            lock = self._signal_locks.setdefault(lock_key, asyncio.Lock())
+            if lock.locked():
+                logger.debug("Signal skipped — already processing", user_id=user_id, symbol=symbol)
+                continue
             try:
-                await self._process_signal_for_user(user_id, config, signal_data)
+                async with lock:
+                    await self._process_signal_for_user(user_id, config, signal_data)
             except Exception as e:
                 logger.error(
                     "Error processing signal for user",
@@ -266,6 +273,40 @@ class AgentLoop:
 
         elif decision.action == "CLOSE":
             exec_result = await self._executor.close_long(
+                user_id=user_id, symbol=symbol,
+                quantity=decision.quantity,
+                signal_data=signal_data, claude_rec=claude_rec,
+                client=client, pool=self._pool,
+                conn_id=self._conn_ids.get(user_id),
+                tracker=self._tracker, risk_mgr=self._risk_mgr,
+                scorer=self._scorer,
+            )
+            status          = exec_result.status
+            broker_order_id = exec_result.broker_order_id
+
+        elif decision.action == "OPEN_SHORT":
+            exec_result = await self._executor.open_short(
+                user_id=user_id, symbol=symbol,
+                quantity=decision.quantity,
+                signal_data=signal_data, claude_rec=claude_rec,
+                client=client, pool=self._pool,
+                conn_id=self._conn_ids.get(user_id),
+                tracker=self._tracker, scorer=self._scorer,
+                claude_decision_id=result.claude_decision_id,
+            )
+            status          = exec_result.status
+            broker_order_id = exec_result.broker_order_id
+            if self._pool and result.claude_decision_id and exec_result.status == "FAILED":
+                try:
+                    await self._pool.execute(
+                        'UPDATE "ClaudeDecision" SET "executionStatus" = $1 WHERE id = $2',
+                        "FAILED", result.claude_decision_id,
+                    )
+                except Exception:
+                    pass
+
+        elif decision.action == "CLOSE_SHORT":
+            exec_result = await self._executor.close_short(
                 user_id=user_id, symbol=symbol,
                 quantity=decision.quantity,
                 signal_data=signal_data, claude_rec=claude_rec,

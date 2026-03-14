@@ -169,7 +169,7 @@ class StrategyArchitect:
                 logger.warning("Failed to save Claude decision", error=str(e))
 
         # ── 6. Apply Claude recommendation ───────────────────────────────────
-        if decision.action in ("OPEN_LONG", "CLOSE") and not claude_rec.execute:
+        if decision.action in ("OPEN_LONG", "OPEN_SHORT", "CLOSE", "CLOSE_SHORT") and not claude_rec.execute:
             logger.info(
                 "Claude REJECTED",
                 user_id=user_id, symbol=symbol,
@@ -188,7 +188,7 @@ class StrategyArchitect:
                 except Exception:
                     pass
 
-        elif claude_rec.recommendation == "REDUCE" and decision.action == "OPEN_LONG":
+        elif claude_rec.recommendation == "REDUCE" and decision.action in ("OPEN_LONG", "OPEN_SHORT"):
             original_qty   = decision.quantity
             decision.quantity = round(decision.quantity * claude_rec.adjusted_size, 6)
             logger.info(

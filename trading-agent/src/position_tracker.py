@@ -34,13 +34,13 @@ class PositionTracker:
     def get_total_value(self, user_id: str) -> float:
         return sum(p.market_value for p in self._positions.get(user_id, {}).values())
 
-    def record_open(self, user_id: str, symbol: str, qty: float, price: float) -> None:
+    def record_open(self, user_id: str, symbol: str, qty: float, price: float, side: str = "long") -> None:
         if user_id not in self._positions:
             self._positions[user_id] = {}
         self._positions[user_id][symbol] = Position(
             symbol=symbol, quantity=qty, avg_entry_price=price,
             current_price=price, market_value=qty * price,
-            unrealized_pl=0, side="long",
+            unrealized_pl=0, side=side,
         )
 
     def record_close(self, user_id: str, symbol: str) -> None:

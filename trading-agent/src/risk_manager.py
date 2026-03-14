@@ -147,19 +147,29 @@ class RiskManager:
     ) -> tuple[bool, str]:
         """Check if an existing position should be closed."""
         price = position.current_price
-
-        # Stop loss
-        if risk and risk.stop_loss_price and price <= risk.stop_loss_price:
-            return True, f"Stop loss hit (${risk.stop_loss_price})"
-
-        # Take profit
-        if risk and risk.take_profit_price and price >= risk.take_profit_price:
-            return True, f"Take profit hit (${risk.take_profit_price})"
-
-        # Signal reversal: long position + SELL signal
         sig = signal.get("signal", "HOLD")
-        if position.side == "long" and sig == "SELL":
-            return True, "SELL signal on long position"
+
+        if position.side == "long":
+            # Stop loss: price fell below threshold
+            if risk and risk.stop_loss_price and price <= risk.stop_loss_price:
+                return True, f"Stop loss hit (${risk.stop_loss_price})"
+            # Take profit: price rose above threshold
+            if risk and risk.take_profit_price and price >= risk.take_profit_price:
+                return True, f"Take profit hit (${risk.take_profit_price})"
+            # Signal reversal
+            if sig == "SELL":
+                return True, "SELL signal on long position"
+
+        elif position.side == "short":
+            # Stop loss for short: price ROSE above threshold (losing trade)
+            if risk and risk.stop_loss_price and price >= risk.stop_loss_price:
+                return True, f"Short stop loss hit (${risk.stop_loss_price})"
+            # Take profit for short: price FELL below threshold (winning trade)
+            if risk and risk.take_profit_price and price <= risk.take_profit_price:
+                return True, f"Short take profit hit (${risk.take_profit_price})"
+            # Signal reversal
+            if sig == "BUY":
+                return True, "BUY signal on short position"
 
         return False, ""
 

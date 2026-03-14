@@ -48,6 +48,23 @@ QUANTITY_PRECISION: dict[str, int] = {
 }
 DEFAULT_PRECISION = 4
 
+# Minimum order sizes for Bitget USDT-FUTURES (simulated mode).
+# Orders below these will be rejected with error 45111.
+FUTURES_MIN_QTY: dict[str, float] = {
+    "BTCUSDT": 0.001,
+    "ETHUSDT": 0.01,
+    "SOLUSDT": 0.1,
+    "XRPUSDT": 10.0,
+    "DOGEUSDT": 100.0,
+    "ADAUSDT": 10.0,
+    "BNBUSDT": 0.1,
+    "AVAXUSDT": 0.1,
+    "DOTUSDT": 1.0,
+    "LINKUSDT": 1.0,
+    "LTCUSDT": 0.1,
+}
+FUTURES_DEFAULT_MIN_QTY = 1.0
+
 
 def _truncate_qty(symbol: str, qty: float) -> float:
     """Truncate quantity to Bitget's allowed decimal precision."""
@@ -94,6 +111,7 @@ class BitgetClient(BrokerClient):
             "ACCESS-PASSPHRASE": self._passphrase,
             "Content-Type": "application/json",
             "locale": "en-US",
+            **({"paptrading": "1"} if self._simulated else {}),
         }
 
         resp = await self._client.request(
@@ -149,7 +167,15 @@ class BitgetClient(BrokerClient):
         size_value = _truncate_qty(req.symbol, req.quantity)
 
         if self._simulated:
+            # Enforce minimum order quantity for USDT-FUTURES
+            min_qty = FUTURES_MIN_QTY.get(req.symbol, FUTURES_DEFAULT_MIN_QTY)
+            if size_value < min_qty:
+                raise RuntimeError(
+                    f"Order qty {size_value} {req.symbol} is below Bitget futures minimum {min_qty}"
+                )
+
             # Futures (mix) order: tradeSide open for buy, close for sell
+            trade_side = req.trade_side or ("open" if req.side.lower() == "buy" else "close")
             body: dict = {
                 "symbol": req.symbol,
                 "productType": "USDT-FUTURES",
@@ -157,7 +183,7 @@ class BitgetClient(BrokerClient):
                 "marginCoin": "USDT",
                 "size": str(size_value),
                 "side": req.side,
-                "tradeSide": "open" if req.side.lower() == "buy" else "close",
+                "tradeSide": trade_side,
                 "orderType": req.type,
                 "force": req.time_in_force or "gtc",
             }
@@ -313,8 +339,8 @@ class BitgetClient(BrokerClient):
                 (a for a in (accounts or []) if a.get("marginCoin") == "USDT"),
                 (accounts or [None])[0],
             )
-            equity = float(usdt_acc["equity"]) if usdt_acc else 0.0
-            available = float(usdt_acc["available"]) if usdt_acc else 0.0
+            equity = float(usdt_acc.get("equity") or usdt_acc.get("usdtEquity") or 0) if usdt_acc else 0.0
+            available = float(usdt_acc.get("available") or usdt_acc.get("crossedMaxAvailable") or 0) if usdt_acc else 0.0
             return AccountInfo(
                 equity=equity,
                 buying_power=available,
