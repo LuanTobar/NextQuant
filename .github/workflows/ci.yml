@@ -27,10 +27,11 @@ jobs:
           pip install pytest pytest-asyncio
 
       - name: Run tests
+        working-directory: /python-ml
         run: |
-          python -m pytest python-ml/tests/ -v --tb=short
+          python -m pytest tests/ -v --tb=short
         env:
-          PYTHONPATH: python-ml/src
+          PYTHONPATH: .
 
   # ── Trading Agent Tests ──────────────────────────────────────
   trading-agent-tests:
