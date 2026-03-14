@@ -10,6 +10,7 @@ class OrderRequest:
     type: str           # "market" | "limit"
     time_in_force: str = "day"
     limit_price: float | None = None
+    trade_side: str | None = None   # Futures only: "open" | "close" (overrides auto-detect)
 
 
 @dataclass

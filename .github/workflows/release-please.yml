@@ -1,0 +1,87 @@
+name: Release Please
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  # TRABAJO 1: Google Release Please (crea la versión)
+  release-please:
+    runs-on: ubuntu-latest
+    outputs:
+      # Exportamos estas variables para que Claude sepa si hubo un release y qué versión es
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+    steps:
+      - uses: googleapis/release-please-action@v4
+        id: release # Este ID es crucial para exportar los datos
+        with:
+          release-type: simple
+
+  # TRABAJO 2: Claude AI Release Notes (se ejecuta SOLO al publicar el release)
+  generate-ai-release-notes:
+    needs: release-please
+    if: ${{ needs.release-please.outputs.release_created == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout del código
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Necesario para leer el historial de git
+
+      - name: Obtener commits desde el último release
+        id: commits
+        run: |
+          TAG="${{ needs.release-please.outputs.tag_name }}"
+          # Buscamos la versión anterior
+          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          
+          # Extraemos los commits entre la versión anterior y la actual
+          if [ -n "$PREV_TAG" ]; then
+            COMMITS=$(git log $PREV_TAG..HEAD --pretty=format:"- %s")
+          else
+            COMMITS=$(git log --pretty=format:"- %s")
+          fi
+          
+          echo "TAG=$TAG" >> $GITHUB_ENV
+          # Sintaxis segura para guardar textos largos (multilínea) en GitHub Actions
+          echo "COMMITS<<EOF" >> $GITHUB_ENV
+          echo "$COMMITS" >> $GITHUB_ENV
+          echo "EOF" >> $GITHUB_ENV
+
+      - name: Generar notas con Claude y actualizar GitHub
+        env:
+          # Usamos la llave que configuraste en pasos anteriores
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # 1. Empaquetamos la petición de forma segura
+          PAYLOAD=$(jq -n \
+            --arg system "Eres un redactor técnico experto. A partir de la lista de cambios técnicos, genera notas de release en castellano, bien estructuradas y profesionales. Incluye: un resumen de 1-2 líneas al inicio, y secciones para '🚀 Nuevas funcionalidades', '🐛 Correcciones', y '🔧 Otros cambios'. Usa un tono cercano pero muy profesional. Devuelve SOLO el contenido final en formato Markdown, sin introducciones ni saludos." \
+            --arg prompt "Genera las notas de release para la versión $TAG basándote en estos commits:\n\n$COMMITS" \
+            '{
+              model: "claude-3-5-sonnet-latest",
+              max_tokens: 1500,
+              system: $system,
+              messages: [
+                {role: "user", content: $prompt}
+              ]
+            }')
+
+          # 2. Llamamos a la API de Claude
+          RESPONSE=$(curl -s https://api.anthropic.com/v1/messages \
+            -H "x-api-key: $ANTHROPIC_API_KEY" \
+            -H "anthropic-version: 2023-06-01" \
+            -H "content-type: application/json" \
+            -d "$PAYLOAD")
+
+          # 3. Extraemos el texto de la respuesta
+          AI_NOTES=$(echo "$RESPONSE" | jq -r '.content[0].text')
+
+          # 4. Usamos la CLI de GitHub para sobrescribir las notas aburridas con las de Claude
+          gh release edit "$TAG" --notes "$AI_NOTES"

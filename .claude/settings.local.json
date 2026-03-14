@@ -6,7 +6,8 @@
       "WebFetch(domain:lib.rs)",
       "WebFetch(domain:docs.alpaca.markets)",
       "WebFetch(domain:finnhub.io)",
-      "WebFetch(domain:artificialanalysis.ai)"
+      "WebFetch(domain:artificialanalysis.ai)",
+      "Bash(docker-compose logs:*)"
     ]
   }
 }

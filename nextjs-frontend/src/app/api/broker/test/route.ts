@@ -107,6 +107,7 @@ async function testBitget(
       'ACCESS-TIMESTAMP': timestamp,
       'Content-Type': 'application/json',
       'locale': 'en-US',
+      ...(simulated ? { 'paptrading': '1' } : {}),
     },
   });
 

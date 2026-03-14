@@ -35,9 +35,11 @@ interface BitgetConfig {
 
 interface BitgetMixAccount {
   marginCoin: string;
-  equity: string;
-  available: string;
-  unrealizedPL: string;
+  equity?: string;        // present in some API versions
+  usdtEquity?: string;   // present in others
+  available?: string;
+  crossedMaxAvailable?: string;
+  unrealizedPL?: string;
 }
 
 interface BitgetMixPosition {
@@ -49,6 +51,7 @@ interface BitgetMixPosition {
   markPrice: string;
   unrealizedPL: string;
   marginCoin: string;
+  marginMode: string;  // 'crossed' | 'isolated'
 }
 
 // ── Internal Bitget response types ─────────────────────────
@@ -168,6 +171,7 @@ export class BitgetClient implements BrokerClient {
       'ACCESS-PASSPHRASE': this.passphrase,
       'Content-Type': 'application/json',
       locale: 'en-US',
+      ...(this.simulated ? { paptrading: '1' } : {}),
     };
 
     const res = await fetch(`${BITGET_BASE}${path}`, {
@@ -442,21 +446,51 @@ export class BitgetClient implements BrokerClient {
    */
   async closePosition(symbol: string, quantity?: number): Promise<OrderResponse> {
     if (this.simulated) {
-      // Get full position size if not specified
-      if (!quantity) {
-        const positions = await this.request<BitgetMixPosition[]>(
-          'GET',
-          '/api/v2/mix/position/all-position?productType=USDT-FUTURES'
-        );
-        const pos = (positions || []).find(
-          (p) => p.symbol === symbol && p.holdSide === 'long'
-        );
-        if (!pos || Number(pos.available) <= 0) {
-          throw new Error(`No available long position for ${symbol} to close`);
-        }
-        quantity = Number(pos.available);
+      // Fetch all futures positions to find the actual available quantity
+      const positions = await this.request<BitgetMixPosition[]>(
+        'GET',
+        '/api/v2/mix/position/all-position?productType=USDT-FUTURES'
+      );
+      // Accept any holdSide (long, short, net — one-way mode uses "net" or "long")
+      const pos = (positions || []).find((p) => p.symbol === symbol);
+      if (!pos || Number(pos.available) <= 0) {
+        throw new Error(`No available position for ${symbol} to close`);
       }
-      return this.placeOrder({ symbol, side: 'sell', quantity, type: 'market', timeInForce: 'ioc' });
+      const closeQty = quantity
+        ? Math.min(quantity, Number(pos.available))
+        : Number(pos.available);
+
+      // Build close order based on account mode:
+      // - One-way mode: holdSide === 'net' → just side:'sell', no tradeSide/holdSide
+      // - Hedge mode:   holdSide === 'long' → side:'sell', tradeSide:'close', holdSide:'long'
+      const isHedgeMode = pos.holdSide.toLowerCase() === 'long';
+      const closeBody: Record<string, unknown> = {
+        symbol,
+        productType: 'USDT-FUTURES',
+        marginMode: pos.marginMode || 'crossed',
+        marginCoin: pos.marginCoin || 'USDT',
+        size: String(closeQty),
+        side: 'sell',
+        orderType: 'market',
+        force: 'gtc',
+      };
+      if (isHedgeMode) {
+        closeBody.tradeSide = 'close';
+        closeBody.holdSide = 'long';
+      }
+      const data = await this.request<{ orderId: string }>(
+        'POST', '/api/v2/mix/order/place-order', closeBody
+      );
+      return {
+        brokerId: data?.orderId ?? '',
+        symbol,
+        side: 'sell',
+        quantity: closeQty,
+        type: 'market',
+        status: 'new',
+        createdAt: new Date().toISOString(),
+        raw: data as unknown as Record<string, unknown>,
+      };
     }
 
     // Spot: sell the full available balance
@@ -496,8 +530,8 @@ export class BitgetClient implements BrokerClient {
         '/api/v2/mix/account/accounts?productType=USDT-FUTURES'
       );
       const usdtAccount = (accounts || []).find((a) => a.marginCoin === 'USDT') ?? accounts?.[0];
-      const equity = usdtAccount ? Number(usdtAccount.equity) : 0;
-      const available = usdtAccount ? Number(usdtAccount.available) : 0;
+      const equity = usdtAccount ? Number((usdtAccount as unknown as Record<string,string>)['equity'] ?? (usdtAccount as unknown as Record<string,string>)['usdtEquity'] ?? 0) : 0;
+      const available = usdtAccount ? Number((usdtAccount as unknown as Record<string,string>)['available'] ?? (usdtAccount as unknown as Record<string,string>)['crossedMaxAvailable'] ?? 0) : 0;
       return {
         equity,
         buyingPower: available,
