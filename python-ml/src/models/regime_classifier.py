@@ -179,6 +179,11 @@ class RegimeClassifier:
             except Exception as exc:
                 logger.warning("Discarding corrupt HMM on load", symbol=symbol, error=str(exc))
 
+        # Restore obs_counts for symbols not yet trained (no model in state)
+        for symbol, count in obs_counts.items():
+            if symbol not in valid_counts:
+                valid_counts[symbol] = count
+
         with self._lock:
             self._models = valid_models
             self._state_maps = valid_maps
