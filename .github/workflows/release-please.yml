@@ -60,12 +60,12 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # 1. Empaquetamos la petición de forma segura
+          # 1. Empaquetamos la petición (¡Usando Haiku para optimizar tokens al máximo!)
           PAYLOAD=$(jq -n \
             --arg system "Eres un redactor técnico experto. A partir de la lista de cambios técnicos, genera notas de release en castellano, bien estructuradas y profesionales. Incluye: un resumen de 1-2 líneas al inicio, y secciones para '🚀 Nuevas funcionalidades', '🐛 Correcciones', y '🔧 Otros cambios'. Usa un tono cercano pero muy profesional. Devuelve SOLO el contenido final en formato Markdown, sin introducciones ni saludos." \
             --arg prompt "Genera las notas de release para la versión $TAG basándote en estos commits:\n\n$COMMITS" \
             '{
-              model: "claude-3-5-sonnet-latest",
+              model: "claude-3-5-haiku-20241022",
               max_tokens: 1500,
               system: $system,
               messages: [
@@ -80,8 +80,19 @@ jobs:
             -H "content-type: application/json" \
             -d "$PAYLOAD")
 
-          # 3. Extraemos el texto de la respuesta
-          AI_NOTES=$(echo "$RESPONSE" | jq -r '.content[0].text')
+          # 3. ¡IMPRIMIMOS LA RESPUESTA PARA VER EL ERROR SI ALGO FALLA!
+          echo "=== RESPUESTA DE LA API DE CLAUDE ==="
+          echo "$RESPONSE"
+          echo "====================================="
 
-          # 4. Usamos la CLI de GitHub para sobrescribir las notas aburridas con las de Claude
+          # 4. Extraemos el texto de la respuesta
+          AI_NOTES=$(echo "$RESPONSE" | jq -r '.content[0].text // empty')
+
+          # 5. ESCUDO: Verificamos si Claude devolvió texto real o falló
+          if [ -z "$AI_NOTES" ] || [ "$AI_NOTES" == "null" ]; then
+            echo "❌ Error: Claude no devolvió un texto válido. Revisa el log de arriba."
+            exit 1
+          fi
+
+          # 6. Usamos la CLI de GitHub para actualizar las notas
           gh release edit "$TAG" --notes "$AI_NOTES"
